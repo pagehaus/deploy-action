@@ -1,0 +1,36 @@
+# Runs the action on Linux, macOS and Windows against the real Pagehaus API with a token that doesn't exist: the tool
+# is downloaded and run, checks the test site, and Pagehaus turns the token away. No secret needed.
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy with a made-up token
+        id: deploy
+        continue-on-error: true
+        uses: ./
+        with:
+          token: ph_0000000000000000000000000000000000000000000
+          site: does-not-exist
+          folder: test/site
+          dry-run: true
+      - name: Expect Pagehaus to refuse it
+        shell: bash
+        run: |
+          [ "${{ steps.deploy.outcome }}" = failure ] || { echo "The deploy should have failed"; exit 1; }
+          grep -q "token wasn't accepted" "$RUNNER_TEMP/pagehaus-deploy.log"
+          echo "Downloaded, ran, checked the site and reached Pagehaus."

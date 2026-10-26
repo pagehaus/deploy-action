@@ -1,0 +1,88 @@
+name: Deploy to Pagehaus
+description: Upload a plain HTML website to Pagehaus, after checking it for broken links and other mistakes.
+author: Pagehaus
+branding:
+  icon: upload-cloud
+  color: blue
+
+inputs:
+  token:
+    description: A Pagehaus API token with write access to the site (pagehaus.app/account/api). Keep it in a secret.
+    required: true
+  site:
+    description: The site's name (the "bakery" in bakery.pagehaus.site). Can be left out when the token is for one site, or the account has one.
+    required: false
+    default: ""
+  folder:
+    description: The folder to upload, relative to the repository.
+    required: false
+    default: "."
+  dry-run:
+    description: "true: only show what would change."
+    required: false
+    default: "false"
+  force:
+    description: "true: upload even if pagehaus check finds problems."
+    required: false
+    default: "false"
+  version:
+    description: The pagehaus tool version to use, such as 0.1.1, or latest.
+    required: false
+    default: latest
+
+outputs:
+  url:
+    description: The site's address, after a deploy that changed something.
+    value: ${{ steps.deploy.outputs.url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install pagehaus
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Linux-X64) rid=linux-x64 ;;
+          Linux-ARM64) rid=linux-arm64 ;;
+          macOS-ARM64) rid=osx-arm64 ;;
+          macOS-X64) rid=osx-x64 ;;
+          Windows-X64) rid=win-x64 ;;
+          *) echo "::error::pagehaus has no download for $RUNNER_OS on $RUNNER_ARCH." && exit 1 ;;
+        esac
+        if [ "$VERSION" = latest ]; then base=https://github.com/pagehaus/cli/releases/latest/download
+        else base="https://github.com/pagehaus/cli/releases/download/v${VERSION#v}"; fi
+        dir="$RUNNER_TEMP/pagehaus-cli"
+        mkdir -p "$dir"
+        if [ "$rid" = win-x64 ]; then
+          curl -fsSL -o "$dir/pagehaus.zip" "$base/pagehaus-$rid.zip"
+          pwsh -NoProfile -Command "Expand-Archive -Force '$dir/pagehaus.zip' '$dir'"
+        else
+          curl -fsSL "$base/pagehaus-$rid.tar.gz" | tar -xz -C "$dir" pagehaus
+        fi
+        echo "$dir" >> "$GITHUB_PATH"
+        "$dir/pagehaus" --version
+
+    - name: Deploy
+      id: deploy
+      shell: bash
+      # Inputs go in as environment variables, never into the script itself.
+      env:
+        PAGEHAUS_TOKEN: ${{ inputs.token }}
+        SITE: ${{ inputs.site }}
+        FOLDER: ${{ inputs.folder }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        FORCE: ${{ inputs.force }}
+      run: |
+        args=(deploy "$FOLDER")
+        [ -n "$SITE" ] && args+=(--site "$SITE")
+        [ "$DRY_RUN" = true ] && args+=(--dry-run)
+        [ "$FORCE" = true ] && args+=(--force)
+        log="$RUNNER_TEMP/pagehaus-deploy.log"
+        set +e
+        pagehaus "${args[@]}" 2>&1 | tee "$log"
+        status=${PIPESTATUS[0]}
+        set -e
+        echo "url=$(sed -n 's/^Done: //p' "$log" | tail -1)" >> "$GITHUB_OUTPUT"
+        exit "$status"
